@@ -820,3 +820,26 @@ The report should be in markdown format and the checlist report should be a mark
 The report should then make recommendations for every item that did not pass the checklist check with steps on how to resolve them on the specific operating system.
 
 Use colours in the terminal/Powershell window output
+
+## Model selection and configuration (all three tools)
+
+Added to the macOS tool in PR #2; build the same behaviour into the Windows and Linux tools.
+
+1. **List models:** a `--list-models` option (PowerShell: `-ListModels`) lists the installed models for the selected or auto-detected server, with sizes where the server reports them, then exits 0 (exit 3 if no server responds).
+   - Ollama: `GET /api/tags`. LM Studio and llama.cpp: `GET /v1/models`.
+   - Mark embedding models (for example `nomic-embed-text`, `all-minilm`, or the Ollama `bert` family) as not selectable.
+2. **Interactive picker:** `-i` / `--interactive` (PowerShell: `-Interactive`) shows a numbered menu of installed non-embedding models and validates the choice (out of range or non-numeric input re-prompts; end of input exits 3).
+   - It also runs automatically when the tool is in an interactive terminal and no model was given on the command line or in the config.
+   - If more than one server responds, offer a server choice first.
+   - Never prompt when not attached to a terminal (scripts, pipes, CI); fall back to the default model so scripted runs behave as before.
+   - Draw the menu on the terminal, not stdout, so it never appears in piped output.
+3. **Model validation:** `-m` / `--model` (PowerShell: `-Model`) is checked against the installed list. An unknown or embedding model prints an error plus the installed list and exits 3. For Ollama, accept the name with or without `:latest`.
+4. **Config file:** `-c` / `--config <file>` (PowerShell: `-Config`), plus a default config file if present.
+   - Format: plain `KEY=value` lines. Keys: `SERVER`, `URL`, `MODEL`, `LOG`, `SESSION_LOG`, `OUTPUT`, `SKIP_LIVE`, `NO_COLOR`. Booleans accept 0/1, true/false, yes/no. Strip matching quotes and trailing ` # comments`.
+   - Parse safely: never source, eval, or dot-include the file. Warn on unknown keys and malformed lines, then continue.
+   - Precedence: command line, then config file, then auto-detect/defaults.
+   - Default locations: macOS `./local-llm-checkup.conf` next to the script or `~/.config/local-llm-checkup/config`; Linux the same two; Windows `local-llm-checkup.conf` next to the script or `%APPDATA%\local-llm-checkup\config`.
+   - Ship a `local-llm-checkup.conf.example` and git-ignore the real config file.
+5. **Report:** the report header records how the model was chosen (CLI, config, interactive, or default) and the config file path used, or "none".
+
+Exit codes are unchanged (0 all pass, 1 warn, 2 fail, 3 tool error). The tools still never change any system or application configuration.
