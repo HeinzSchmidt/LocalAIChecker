@@ -2,10 +2,11 @@
 
 **Find out why your local AI feels slow, and what to change to fix it.**
 
+![Why does my local LLM feel slow?](./documentation/LocalAIChecker.jpg)
+
 LocalAIChecker is a free health check for AI models running on your own computer through
 Ollama, LM Studio or llama.cpp. It looks at your setup, runs a short test conversation with
-your model, and gives you a scored report in plain language with clear steps to fix whatever
-is holding it back.
+your model, and gives you a scored report in plain language with clear steps to fix whatever is holding it back.
 
 It runs on **macOS**, **Windows** and **Linux**.
 
