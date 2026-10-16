@@ -537,7 +537,7 @@ fi
 # ----------------------------------------------------------------------------
 # C2: Ollama context window (reads `ollama ps` CONTEXT column)
 # ----------------------------------------------------------------------------
-CTX=""
+CTX=""; MODEL_MAX=""; C2_CAPPED=0
 if [ "$SERVER" != "ollama" ]; then
   record C2 "Ollama context window" SKIP "Ollama not installed or not the selected server"
 else
@@ -550,11 +550,29 @@ else
   fi
   # Fallback to the API (context_length) if the CLI is unavailable or the format changed.
   [ -z "$CTX" ] && CTX="$(curl -fsS -m 5 "$URL/api/ps" 2>/dev/null | jq -r --arg m "$MODEL" '[.models[] | select($m=="" or .name==$m) | .context_length // empty][0] // empty' 2>/dev/null)"
+  # Ollama caps the loaded context at the model's trained maximum, so OLLAMA_CONTEXT_LENGTH
+  # cannot raise it beyond that. Read the maximum from /api/show model_info
+  # ("<general.architecture>.context_length", else any "*.context_length"). Optional.
+  if [ -n "$MODEL" ]; then
+    MODEL_MAX="$(jq -n --arg m "$MODEL" '{model:$m}' | curl -fsS -m 10 -d @- "$URL/api/show" 2>/dev/null | jq -r '
+      (.model_info // {}) as $i
+      | ($i[(($i["general.architecture"] // "") + ".context_length")]
+         // ([$i | to_entries[] | select(.key|endswith(".context_length")) | .value][0])) // empty' 2>/dev/null)"
+    case "$MODEL_MAX" in *[!0-9]*) warn "unexpected model context length '$MODEL_MAX'; ignored"; MODEL_MAX="";; esac
+    [ -z "$MODEL_MAX" ] && warn "could not read the trained context length of $MODEL from /api/show"
+  fi
+  max_txt=""; [ -n "$MODEL_MAX" ] && max_txt="; model maximum $(fmtn "$MODEL_MAX")"
+  if [ -n "$CTX" ] && [ -n "$MODEL_MAX" ] && [ "$CTX" -lt 64000 ] && [ "$CTX" -ge "$MODEL_MAX" ]; then
+    C2_CAPPED=1   # the setting cannot help; recommendation changes (same score thresholds)
+    cdet="Context $(fmtn "$CTX") = model maximum $(fmtn "$MODEL_MAX"); setting cannot raise it"
+  else
+    cdet="Context $(fmtn "$CTX"), minimum 64,000$max_txt"
+  fi
   if [ -z "$CTX" ]; then
     record C2 "Ollama context window" SKIP "No model loaded (run without --skip-live, or load a model)"
-  elif [ "$CTX" -ge 64000 ]; then record C2 "Ollama context window" PASS "Context $(fmtn "$CTX")"
-  elif [ "$CTX" -ge 32000 ]; then record C2 "Ollama context window" WARN "Context $(fmtn "$CTX"), minimum 64,000"
-  else record C2 "Ollama context window" FAIL "Context $(fmtn "$CTX"), minimum 64,000"
+  elif [ "$CTX" -ge 64000 ]; then record C2 "Ollama context window" PASS "Context $(fmtn "$CTX")$max_txt"
+  elif [ "$CTX" -ge 32000 ]; then record C2 "Ollama context window" WARN "$cdet"
+  else record C2 "Ollama context window" FAIL "$cdet"
   fi
 fi
 
@@ -678,11 +696,19 @@ R
 **Why it matters:** an agent's first request (about 33,000 tokens for Claude Code) does not fit in a small context window, so Ollama truncates the prompt and the cached prefix no longer matches.
 
 **Fix on macOS:**
-- Run \`ollama ps\` and note the CONTEXT column.
+R
+    if [ "$C2_CAPPED" -eq 1 ]; then cat <<R
+- This model was trained with a maximum context of $(fmtn "$MODEL_MAX") tokens, and Ollama never loads it with more. Raising \`OLLAMA_CONTEXT_LENGTH\` will not change it.
+- Use a model with a larger trained context window (64,000 tokens or more) for agent sessions. Check a model's limit with \`ollama show <model>\` (the "context length" line) before pulling or choosing it.
+- Re-run the tool with that model (\`-m <model>\` or the interactive menu) and confirm C2 shows PASS.
+R
+    else cat <<R
+- Run \`ollama ps\` and note the CONTEXT column.${MODEL_MAX:+ This model supports up to $(fmtn "$MODEL_MAX") tokens (\`ollama show $MODEL\`).}
 - Set the context length to at least 64000. Run \`launchctl setenv OLLAMA_CONTEXT_LENGTH 65536\`, then quit Ollama from the menu bar and reopen it. For \`ollama serve\` started from Terminal, use \`OLLAMA_CONTEXT_LENGTH=65536 ollama serve\` instead.
 - Run \`ollama ps\` again to confirm the new value. Ollama must reload the model before the change applies.
 - Higher context uses more unified memory. On a 48 GB Mac, check Activity Monitor for memory pressure after the change.
 R
+    fi
   ;;
   C3) cat <<R
 **Found:** $2
@@ -732,6 +758,7 @@ md_escape() { printf '%s' "$1" | sed 's/|/\\|/g'; }
   printf -- '- Ollama: %s\n- LM Studio: %s\n- llama.cpp: %s\n' "${OLLAMA_VER:-not found}" "${LMS_VER:-not found}" "${LLAMA_VER:-not found}"
   printf -- '- Claude Code: %s\n' "${CLAUDE_VER:-not found}"
   printf -- '- Selected server: %s\n- Endpoint: %s\n- Model: %s%s\n' "$(server_label "$SERVER")" "${URL:-n/a}" "${MODEL:-n/a}" "${MODEL_NOTE:+ ($MODEL_NOTE)}"
+  printf -- '- Model trained context (max): %s\n' "$( [ -n "$MODEL_MAX" ] && fmtn "$MODEL_MAX" || echo 'n/a')"
   printf -- '- Model chosen by: %s\n- Config file: %s\n' "${MODEL_SOURCE:-n/a}" "${CONFIG_USED:-none}"
   printf -- '- Server log: %s\n\n' "${LOG_FILE:-not found}"
   printf '## Summary\n\n**Overall score: %s** (%d items scored, %d excluded)\n\n' "$SCORE_TXT" "$NSCORED" "$NEXCL"
@@ -753,6 +780,7 @@ md_escape() { printf '%s' "$1" | sed 's/|/\\|/g'; }
       printf '| %d | %s | %s | %s | %s | %s | %s |\n' $t "$d" "${L_TTFT[$t]:--}" "${L_TOTAL[$t]:--}" "$(fmtn "${L_PROMPT[$t]:--}")" "$(fmtn "${L_CACHED[$t]:--}")" "${L_THINK[$t]:--}"
     done
     [ -n "$LIVE_START" ] && [ -n "$LIVE_END" ] && printf '\nTurns 2-4 took %ss (after model load and request 1).\n' "$((LIVE_END - LIVE_START))"
+    [ -n "$CTX" ] && printf '\nLoaded context (ollama ps): %s; model trained maximum: %s.\n' "$(fmtn "$CTX")" "$( [ -n "$MODEL_MAX" ] && fmtn "$MODEL_MAX" || echo 'n/a')"
     [ -n "$LIVE_NOTE" ] && printf '\nNote: %s.\n' "$LIVE_NOTE"
     printf '\n'
   fi

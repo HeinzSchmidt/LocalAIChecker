@@ -841,5 +841,6 @@ Added to the macOS tool in PR #2; build the same behaviour into the Windows and 
    - Default locations: macOS `./local-llm-checkup.conf` next to the script or `~/.config/local-llm-checkup/config`; Linux the same two; Windows `local-llm-checkup.conf` next to the script or `%APPDATA%\local-llm-checkup\config`.
    - Ship a `local-llm-checkup.conf.example` and git-ignore the real config file.
 5. **Report:** the report header records how the model was chosen (CLI, config, interactive, or default) and the config file path used, or "none".
+6. **Model context maximum (C2):** Ollama caps the loaded context at the model's trained maximum (`ollama show <model>` "context length", or `/api/show` `model_info["<arch>.context_length"]`), so read it and show it next to the loaded context. When loaded context is below 64,000 and equals that maximum, keep the same WARN/FAIL thresholds but say the setting cannot raise it, and recommend a model with a larger trained context instead of changing `OLLAMA_CONTEXT_LENGTH`. If the maximum can't be read, fall back to the existing advice.
 
 Exit codes are unchanged (0 all pass, 1 warn, 2 fail, 3 tool error). The tools still never change any system or application configuration.
