@@ -1,3 +1,5 @@
 # Generated checkup reports
 MacOS/reports/
 reports/
+# Local tool config (copy of the .example)
+MacOS/local-llm-checkup.conf

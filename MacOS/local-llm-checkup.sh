@@ -24,8 +24,13 @@ KEEP_ALIVE="10m"              # Ollama: keep the model (and its cache) loaded be
 # ----------------------------------------------------------------------------
 # Defaults for options
 # ----------------------------------------------------------------------------
+# Empty means "not given on the command line" so a config file can fill it in
+# (precedence: CLI > config file > built-in default / auto-detect).
 OPT_SERVER=""; OPT_URL=""; OPT_MODEL=""; OPT_LOG=""; OPT_SESSION_LOG=""
-OPT_SKIP_LIVE=0; OPT_OUTPUT="./reports"; OPT_NO_COLOR=0
+OPT_SKIP_LIVE=""; OPT_OUTPUT=""; OPT_NO_COLOR=""
+OPT_CONFIG=""; OPT_LIST_MODELS=0; OPT_INTERACTIVE=0
+MODEL_SOURCE=""     # how the model was chosen: CLI, config, interactive, default
+CONFIG_USED=""      # config file actually read (for the report)
 
 # ----------------------------------------------------------------------------
 # Helpers
@@ -41,7 +46,13 @@ Usage: local-llm-checkup.sh [options]
 
   -s, --server <ollama|lmstudio|llamacpp>   Server to test (default: auto-detect)
   -u, --url <url>                           Override endpoint
-  -m, --model <name>                        Model to test (default: first loaded model)
+  -m, --model <name>                        Model to test (validated against installed models;
+                                            default: first loaded model)
+  -i, --interactive                         Choose server and model from a menu (automatic on a
+                                            terminal when no model is given by CLI or config)
+      --list-models                         List installed models for the server and exit
+  -c, --config <file>                       Config file (default: ./local-llm-checkup.conf next to
+                                            the script, then ~/.config/local-llm-checkup/config)
   -l, --log <path>                          Server log file for C3 and C4
       --session-log <path>                  Agent session log for C4 (optional)
       --skip-live                           Run static checks only
@@ -49,6 +60,9 @@ Usage: local-llm-checkup.sh [options]
       --no-color                            Disable colours
   -h, --help                                Show help
       --version                             Show version
+
+Config file: KEY=value lines; keys SERVER, URL, MODEL, LOG, SESSION_LOG, OUTPUT,
+SKIP_LIVE (0/1), NO_COLOR (0/1). Command-line options override the config file.
 
 Exit codes: 0 all scored items PASS, 1 WARN (no FAIL), 2 at least one FAIL, 3 tool error.
 USAGE
@@ -86,6 +100,9 @@ while [ $# -gt 0 ]; do
     -s|--server) need_arg "$1" "$2"; OPT_SERVER="$(lower "$2")"; shift 2;;
     -u|--url) need_arg "$1" "$2"; OPT_URL="${2%/}"; shift 2;;
     -m|--model) need_arg "$1" "$2"; OPT_MODEL="$2"; shift 2;;
+    -c|--config) need_arg "$1" "$2"; OPT_CONFIG="$(expand_path "$2")"; shift 2;;
+    -i|--interactive) OPT_INTERACTIVE=1; shift;;
+    --list-models) OPT_LIST_MODELS=1; shift;;
     -l|--log) need_arg "$1" "$2"; OPT_LOG="$(expand_path "$2")"; shift 2;;
     --session-log) need_arg "$1" "$2"; OPT_SESSION_LOG="$(expand_path "$2")"; shift 2;;
     --skip-live) OPT_SKIP_LIVE=1; shift;;
@@ -96,6 +113,56 @@ while [ $# -gt 0 ]; do
     *) err "unknown option: $1"; usage >&2; exit 3;;
   esac
 done
+# ----------------------------------------------------------------------------
+# Config file: parsed line by line as KEY=value. Never sourced or eval'd.
+# ----------------------------------------------------------------------------
+if [ -n "$OPT_CONFIG" ]; then
+  [ -r "$OPT_CONFIG" ] || { err "config file not readable: $OPT_CONFIG"; exit 3; }
+  CONFIG_USED="$OPT_CONFIG"
+elif [ -r "$SCRIPT_DIR/local-llm-checkup.conf" ]; then
+  CONFIG_USED="$SCRIPT_DIR/local-llm-checkup.conf"
+elif [ -r "$HOME/.config/local-llm-checkup/config" ]; then
+  CONFIG_USED="$HOME/.config/local-llm-checkup/config"
+fi
+CFG_MODEL=0   # 1 when MODEL came from the config file
+if [ -n "$CONFIG_USED" ]; then
+  lineno=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    lineno=$((lineno + 1))
+    # Trim whitespace; skip blanks and full-line comments.
+    line="$(printf '%s' "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+    case "$line" in ''|'#'*) continue;; esac
+    case "$line" in *=*) ;; *) warn "$CONFIG_USED:$lineno: ignored (not KEY=value): $line"; continue;; esac
+    key="$(printf '%s' "${line%%=*}" | sed 's/[[:space:]]*$//' | tr '[:lower:]' '[:upper:]')"
+    val="$(printf '%s' "${line#*=}" | sed 's/^[[:space:]]*//')"
+    # Strip one pair of matching surrounding quotes; otherwise drop a trailing " # comment".
+    case "$val" in
+      \"*\") val="${val#\"}"; val="${val%\"}";;
+      \'*\') val="${val#\'}"; val="${val%\'}";;
+      *) val="$(printf '%s' "$val" | sed 's/[[:space:]]#.*$//')";;
+    esac
+    case "$key" in
+      SERVER)      [ -z "$OPT_SERVER" ] && OPT_SERVER="$(lower "$val")";;
+      URL)         [ -z "$OPT_URL" ] && OPT_URL="${val%/}";;
+      MODEL)       if [ -z "$OPT_MODEL" ] && [ -n "$val" ]; then OPT_MODEL="$val"; CFG_MODEL=1; fi;;
+      LOG)         [ -z "$OPT_LOG" ] && OPT_LOG="$(expand_path "$val")";;
+      SESSION_LOG) [ -z "$OPT_SESSION_LOG" ] && OPT_SESSION_LOG="$(expand_path "$val")";;
+      OUTPUT)      [ -z "$OPT_OUTPUT" ] && OPT_OUTPUT="$(expand_path "$val")";;
+      SKIP_LIVE|NO_COLOR)
+        case "$(lower "$val")" in 1|true|yes|on) b=1;; 0|false|no|off|'') b=0;;
+          *) warn "$CONFIG_USED:$lineno: $key must be 0 or 1, got '$val'; ignored"; continue;; esac
+        if [ "$key" = SKIP_LIVE ]; then [ -z "$OPT_SKIP_LIVE" ] && OPT_SKIP_LIVE=$b
+        else [ -z "$OPT_NO_COLOR" ] && OPT_NO_COLOR=$b; fi;;
+      *) warn "$CONFIG_USED:$lineno: unknown key '$key' ignored";;
+    esac
+  done < "$CONFIG_USED"
+fi
+# Built-in defaults for anything still unset.
+[ -z "$OPT_SKIP_LIVE" ] && OPT_SKIP_LIVE=0
+[ -z "$OPT_NO_COLOR" ] && OPT_NO_COLOR=0
+[ -z "$OPT_OUTPUT" ] && OPT_OUTPUT="./reports"
+if [ -n "$OPT_MODEL" ]; then if [ "$CFG_MODEL" -eq 1 ]; then MODEL_SOURCE="config"; else MODEL_SOURCE="CLI"; fi; fi
+
 case "$OPT_SERVER" in ''|ollama|lmstudio|llamacpp) ;; *) err "invalid --server '$OPT_SERVER' (use ollama, lmstudio or llamacpp)"; exit 3;; esac
 if [ -n "$OPT_URL" ] && [ -z "$OPT_SERVER" ]; then err "--url requires --server so the API type is known"; exit 3; fi
 if [ -n "$OPT_LOG" ] && [ ! -r "$OPT_LOG" ]; then err "log file not readable: $OPT_LOG"; exit 3; fi
@@ -150,7 +217,7 @@ record() {  # id name result detail
 # ----------------------------------------------------------------------------
 # Environment (spec 3.3)
 # ----------------------------------------------------------------------------
-heading "Local LLM Checkup for macOS $VERSION"
+[ "$OPT_LIST_MODELS" -eq 0 ] && heading "Local LLM Checkup for macOS $VERSION"
 OS_VER="$(sw_vers -productVersion 2>/dev/null || echo unknown)"
 CHIP="$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo unknown)"
 MEM_B="$(sysctl -n hw.memsize 2>/dev/null || echo 0)"
@@ -171,42 +238,149 @@ LLAMA_VER=""; command -v llama-server >/dev/null 2>&1 && LLAMA_VER="$(llama-serv
 # Server detection (spec 2.1): explicit --server or probe Ollama -> LM Studio -> llama.cpp
 # ----------------------------------------------------------------------------
 default_url() { case "$1" in ollama) echo "http://localhost:11434";; lmstudio) echo "http://localhost:1234";; llamacpp) echo "http://localhost:8080";; esac; }
-probe() {  # server url -> 0 if it answers its detection endpoint
+server_label() { case "$1" in ollama) echo "Ollama";; lmstudio) echo "LM Studio";; llamacpp) echo "llama.cpp (llama-server)";; *) echo "none";; esac; }
+probe() {  # server url -> 0 if it answers its detection endpoint; saves the reply as probe-<server>.json
   local path="/v1/models"; [ "$1" = "ollama" ] && path="/api/tags"
-  curl -fsS -m 3 "$2$path" -o "$TMPD/probe.json" 2>/dev/null && jq -e . "$TMPD/probe.json" >/dev/null 2>&1
+  curl -fsS -m 3 "$2$path" -o "$TMPD/probe-$1.json" 2>/dev/null && jq -e . "$TMPD/probe-$1.json" >/dev/null 2>&1
 }
-SERVER=""; URL=""; SERVER_NOTE=""
+# Prompt only when both stdin and stdout are terminals.
+is_tty() { [ -t 0 ] && [ -t 1 ]; }
+
+# Interactive menu: prints numbered options to stderr-free stdout, reads a number from stdin.
+# Usage: choose <title> <file with one option per line>  -> prints chosen line
+choose() {
+  local title="$1" file="$2" n i=1 ans line
+  n="$(wc -l < "$file" | tr -d ' ')"
+  printf '%s\n' "$title" >/dev/tty
+  while IFS= read -r line; do printf '  %2d) %s\n' "$i" "$line" >/dev/tty; i=$((i+1)); done < "$file"
+  while :; do
+    printf 'Choose 1-%s [1]: ' "$n" >/dev/tty
+    IFS= read -r ans || { err "no selection (end of input)"; exit 3; }
+    [ -z "$ans" ] && ans=1
+    case "$ans" in *[!0-9]*) printf '  Please enter a number.\n' >/dev/tty; continue;; esac
+    if [ "$ans" -ge 1 ] && [ "$ans" -le "$n" ]; then sed -n "${ans}p" "$file"; return 0; fi
+    printf '  Out of range.\n' >/dev/tty
+  done
+}
+
+# Installed models for $SERVER -> $TMPD/models.tsv as "name<TAB>size_bytes<TAB>embed(0|1)".
+# Embedding models are detected by name, Ollama family (bert) or LM Studio "type".
+EMBED_RE='embed|bge-|minilm|e5-|gte-|nomic-bert|rerank'
+list_installed() {
+  local f="$TMPD/probe-$SERVER.json"
+  if [ "$SERVER" = "ollama" ]; then
+    jq -r --arg re "$EMBED_RE" '.models[] | [.name, (.size // 0 | tostring),
+        (if (.name|test($re;"i")) or ((.details.family // "")|test("bert";"i")) then "1" else "0" end)] | @tsv' "$f"
+  else
+    jq -r --arg re "$EMBED_RE" '.data[] | [.id, "0",
+        (if (.id|test($re;"i")) or ((.type // "")|test("embed";"i")) then "1" else "0" end)] | @tsv' "$f"
+  fi > "$TMPD/models.tsv" 2>/dev/null
+}
+human_size() { awk -v b="$1" 'BEGIN{ if (b<=0) print "-"; else if (b>=1073741824) printf "%.1f GB", b/1073741824; else printf "%.0f MB", b/1048576 }'; }
+
+SERVER=""; URL=""; SERVER_NOTE=""; RESPONDING=""
 if [ -n "$OPT_SERVER" ]; then
   URL="${OPT_URL:-$(default_url "$OPT_SERVER")}"
   if probe "$OPT_SERVER" "$URL"; then SERVER="$OPT_SERVER"
+  elif [ "$OPT_LIST_MODELS" -eq 1 ]; then err "$OPT_SERVER not reachable at $URL"; exit 3
   elif [ "$OPT_SKIP_LIVE" -eq 0 ]; then err "$OPT_SERVER not reachable at $URL (use --skip-live for static checks only)"; exit 3
   else SERVER_NOTE="$OPT_SERVER not reachable at $URL"; warn "$SERVER_NOTE"
   fi
 else
+  # Probe all three (refused connections return at once) so the menu can offer a choice.
   for s in ollama lmstudio llamacpp; do
-    u="$(default_url "$s")"
-    if probe "$s" "$u"; then SERVER="$s"; URL="$u"; break; fi
+    probe "$s" "$(default_url "$s")" && RESPONDING="$RESPONDING $s"
   done
-  [ -z "$SERVER" ] && { SERVER_NOTE="no local server responded (Ollama :11434, LM Studio :1234, llama.cpp :8080)"; warn "$SERVER_NOTE"; }
-fi
-server_label() { case "$1" in ollama) echo "Ollama";; lmstudio) echo "LM Studio";; llamacpp) echo "llama.cpp (llama-server)";; *) echo "none";; esac; }
-
-# Model selection: --model, else first loaded model, else first installed model (Ollama).
-MODEL="$OPT_MODEL"; MODEL_NOTE=""
-if [ -z "$MODEL" ] && [ -n "$SERVER" ]; then
-  if [ "$SERVER" = "ollama" ]; then
-    MODEL="$(curl -fsS -m 5 "$URL/api/ps" 2>/dev/null | jq -r '.models[0].name // empty' 2>/dev/null)"
-    if [ -z "$MODEL" ]; then
-      MODEL="$(jq -r '[.models[] | select((.name|test("embed";"i"))|not)][0].name // empty' "$TMPD/probe.json" 2>/dev/null)"
-      [ -n "$MODEL" ] && MODEL_NOTE="no model loaded; using first installed model"
-    fi
-  else
-    MODEL="$(jq -r '.data[0].id // empty' "$TMPD/probe.json" 2>/dev/null)"
+  RESPONDING="${RESPONDING# }"
+  SERVER="${RESPONDING%% *}"; [ -n "$SERVER" ] && URL="$(default_url "$SERVER")"
+  if [ -z "$SERVER" ]; then
+    SERVER_NOTE="no local server responded (Ollama :11434, LM Studio :1234, llama.cpp :8080)"
+    [ "$OPT_LIST_MODELS" -eq 1 ] && { err "$SERVER_NOTE"; exit 3; }
+    warn "$SERVER_NOTE"
   fi
 fi
 
+# Decide whether to prompt: -i, or automatically on a terminal when no model was given.
+# Never prompt without a TTY (scripted use keeps the old defaults).
+PROMPT=0
+if [ "$OPT_LIST_MODELS" -eq 0 ] && [ -n "$SERVER" ]; then
+  if [ "$OPT_INTERACTIVE" -eq 1 ] || [ -z "$OPT_MODEL" ]; then
+    if is_tty; then PROMPT=1
+    elif [ "$OPT_INTERACTIVE" -eq 1 ]; then warn "--interactive needs a terminal; using defaults"
+    fi
+  fi
+fi
+
+# Server choice when several respond and none was configured.
+if [ "$PROMPT" -eq 1 ] && [ -z "$OPT_SERVER" ] && [ "$RESPONDING" != "$SERVER" ]; then
+  : > "$TMPD/servers.txt"
+  for s in $RESPONDING; do printf '%s  %s\n' "$s" "$(default_url "$s")" >> "$TMPD/servers.txt"; done
+  pick="$(choose "Several local servers responded:" "$TMPD/servers.txt")" || exit 3   # choose runs in a subshell
+  SERVER="${pick%% *}"; URL="$(default_url "$SERVER")"
+fi
+
+[ -n "$SERVER" ] && list_installed
+
+# --list-models: print and exit 0.
+if [ "$OPT_LIST_MODELS" -eq 1 ]; then
+  printf '%s models at %s:\n' "$(server_label "$SERVER")" "$URL"
+  if [ ! -s "$TMPD/models.tsv" ]; then printf '  (none)\n'; exit 0; fi
+  while IFS="$(printf '\t')" read -r name size emb; do
+    tag=""; [ "$emb" = "1" ] && tag="  [embedding, not selectable]"
+    printf '  %-40s %9s%s\n' "$name" "$(human_size "$size")" "$tag"
+  done < "$TMPD/models.tsv"
+  exit 0
+fi
+
+MODEL=""; MODEL_NOTE=""
+if [ -n "$OPT_MODEL" ] && [ -n "$SERVER" ]; then
+  # Validate -m / config MODEL against the installed list (Ollama: ":latest" optional).
+  MODEL="$(awk -F '\t' -v m="$OPT_MODEL" -v srv="$SERVER" '
+    { n=$1; if (n==m) { print n; exit }
+      if (srv=="ollama" && (n==m":latest" || n":latest"==m)) { print n; exit } }' "$TMPD/models.tsv")"
+  if [ -z "$MODEL" ]; then
+    err "model '$OPT_MODEL' ($MODEL_SOURCE) is not installed on $(server_label "$SERVER"). Installed models:"
+    awk -F '\t' '{ printf "  %s%s\n", $1, ($3=="1" ? "  [embedding]" : "") }' "$TMPD/models.tsv" >&2
+    exit 3
+  fi
+  if awk -F '\t' -v m="$MODEL" '$1==m && $3=="1" {f=1} END{exit !f}' "$TMPD/models.tsv"; then
+    err "model '$MODEL' is an embedding model and cannot be chat-tested"; exit 3
+  fi
+elif [ -n "$OPT_MODEL" ]; then
+  MODEL="$OPT_MODEL"   # server unreachable with --skip-live: cannot validate, used for C3 only
+fi
+
+if [ -z "$MODEL" ] && [ "$PROMPT" -eq 1 ]; then
+  awk -F '\t' '$3!="1" { print $1 }' "$TMPD/models.tsv" > "$TMPD/menu.txt"
+  if [ -s "$TMPD/menu.txt" ]; then
+    : > "$TMPD/menu-labels.txt"
+    while IFS= read -r name; do
+      size="$(awk -F '\t' -v m="$name" '$1==m {print $2; exit}' "$TMPD/models.tsv")"
+      printf '%-40s %9s\n' "$name" "$(human_size "$size")" >> "$TMPD/menu-labels.txt"
+    done < "$TMPD/menu.txt"
+    pick="$(choose "Installed models on $(server_label "$SERVER") (embedding models hidden):" "$TMPD/menu-labels.txt")" || exit 3
+    MODEL="${pick%% *}"; MODEL_SOURCE="interactive"
+  else
+    warn "no chat models installed; falling back to defaults"
+  fi
+fi
+
+# Default: first loaded model, else first installed non-embedding model.
+if [ -z "$MODEL" ] && [ -n "$SERVER" ]; then
+  if [ "$SERVER" = "ollama" ]; then
+    MODEL="$(curl -fsS -m 5 "$URL/api/ps" 2>/dev/null | jq -r '.models[0].name // empty' 2>/dev/null)"
+    [ -n "$MODEL" ] && MODEL_NOTE="first loaded model"
+  fi
+  if [ -z "$MODEL" ]; then
+    MODEL="$(awk -F '\t' '$3!="1" { print $1; exit }' "$TMPD/models.tsv")"
+    [ -n "$MODEL" ] && MODEL_NOTE="first installed model"
+  fi
+  [ -n "$MODEL" ] && MODEL_SOURCE="default"
+fi
+
 printf '  macOS %s, %s, %s\n' "$OS_VER" "$CHIP" "$MEM_GB"
-printf '  Server: %s %s  Model: %s\n' "$(server_label "$SERVER")" "${URL:-}" "${MODEL:-none}"
+printf '  Server: %s %s  Model: %s%s\n' "$(server_label "$SERVER")" "${URL:-}" "${MODEL:-none}" "${MODEL_SOURCE:+ (chosen by: $MODEL_SOURCE)}"
+[ -n "$CONFIG_USED" ] && printf '  Config: %s\n' "$CONFIG_USED"
 
 # Server log for C3 (spec 5 default locations).
 LOG_FILE="$OPT_LOG"
@@ -558,6 +732,7 @@ md_escape() { printf '%s' "$1" | sed 's/|/\\|/g'; }
   printf -- '- Ollama: %s\n- LM Studio: %s\n- llama.cpp: %s\n' "${OLLAMA_VER:-not found}" "${LMS_VER:-not found}" "${LLAMA_VER:-not found}"
   printf -- '- Claude Code: %s\n' "${CLAUDE_VER:-not found}"
   printf -- '- Selected server: %s\n- Endpoint: %s\n- Model: %s%s\n' "$(server_label "$SERVER")" "${URL:-n/a}" "${MODEL:-n/a}" "${MODEL_NOTE:+ ($MODEL_NOTE)}"
+  printf -- '- Model chosen by: %s\n- Config file: %s\n' "${MODEL_SOURCE:-n/a}" "${CONFIG_USED:-none}"
   printf -- '- Server log: %s\n\n' "${LOG_FILE:-not found}"
   printf '## Summary\n\n**Overall score: %s** (%d items scored, %d excluded)\n\n' "$SCORE_TXT" "$NSCORED" "$NEXCL"
   printf '| PASS | WARN | FAIL | SKIP | ERROR |\n|------|------|------|------|-------|\n| %d | %d | %d | %d | %d |\n\n' $NP $NW $NF $NS $NE

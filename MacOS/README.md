@@ -22,6 +22,7 @@ reads them and sends test requests. Implements
 |---|---|
 | `local-llm-checkup.sh` | The tool |
 | `hybrid-models.txt` | Model-name patterns for hybrid / SSM / recurrent models (check C3). One `grep -E` pattern per line, `#` comments, uncertain entries marked |
+| `local-llm-checkup.conf.example` | Example config file (copy to `local-llm-checkup.conf`) |
 | `prefix.txt` | Fixed ~3,800-token text block used as the shared prompt prefix. Do not edit: every run must send identical bytes |
 | `reports/` | Default report directory (git-ignored) |
 
@@ -32,7 +33,13 @@ reads them and sends test requests. Implements
 
   -s, --server <ollama|lmstudio|llamacpp>   Server to test (default: auto-detect)
   -u, --url <url>                           Override endpoint (requires --server)
-  -m, --model <name>                        Model to test (default: first loaded model)
+  -m, --model <name>                        Model to test (validated against installed models;
+                                            default: first loaded model)
+  -i, --interactive                         Choose server and model from a menu (automatic on a
+                                            terminal when no model is given by CLI or config)
+      --list-models                         List installed models for the server and exit
+  -c, --config <file>                       Config file (default: ./local-llm-checkup.conf next to
+                                            the script, then ~/.config/local-llm-checkup/config)
   -l, --log <path>                          Server log file for C3 and C4
       --session-log <path>                  Agent session log for C4 (optional)
       --skip-live                           Run static checks only
@@ -46,13 +53,52 @@ Examples:
 
 ```bash
 ./local-llm-checkup.sh                              # auto-detect server, first loaded model
+./local-llm-checkup.sh --list-models                # show installed models (embedding models marked)
+./local-llm-checkup.sh -i                           # pick server/model from a numbered menu
 ./local-llm-checkup.sh -m qwen2.5:3b                # test a specific Ollama model
+./local-llm-checkup.sh -c ~/checkup.conf            # use a config file
 ./local-llm-checkup.sh -m qwen3.5:4b                # thinking model: exercises C5
 ./local-llm-checkup.sh --skip-live                  # static checks only, no requests sent
 ./local-llm-checkup.sh -s llamacpp -l ~/llama.log   # llama.cpp started with -v 4, logging to a file
 ./local-llm-checkup.sh -s lmstudio -o ~/Desktop     # LM Studio, report on the Desktop
 NO_COLOR=1 ./local-llm-checkup.sh                   # plain output
 ```
+
+## Choosing the model
+
+- `--list-models` prints the installed models of the selected or auto-detected server
+  (Ollama `/api/tags` with size; LM Studio and llama.cpp `/v1/models`) and exits 0, or 3 if
+  no server responds. Embedding models are marked and cannot be selected.
+- `-m <name>` is checked against that list. An unknown model prints the installed models and
+  exits 3; Ollama accepts the name with or without `:latest`. Embedding models are rejected (exit 3).
+- With no model from the CLI or config, and both stdin and stdout on a terminal, a numbered menu
+  of installed chat models appears (plus a server menu when several servers respond and none is
+  configured). `-i` forces the menu. Without a terminal it never prompts: it uses the defaults below
+  so scripts and CI behave as before.
+- The report header records how the model was chosen: `CLI`, `config`, `interactive` or `default`.
+
+Example menu (Ollama on an M2):
+
+```
+Installed models on Ollama (embedding models hidden):
+   1) qwen3.5:4b                                  3.2 GB
+   2) qwen2.5:3b                                  1.8 GB
+   3) granite3-moe:3b                             1.9 GB
+   4) gemma3:4b                                   3.1 GB
+   5) nemotron-3-nano:4b                          2.6 GB
+Choose 1-5 [1]: 2
+```
+
+## Config file
+
+Read from `-c <file>`, else `local-llm-checkup.conf` next to the script, else
+`~/.config/local-llm-checkup/config`. Plain `KEY=value` lines; `#` comments; optional quotes.
+Keys: `SERVER`, `URL`, `MODEL`, `LOG`, `SESSION_LOG`, `OUTPUT`, `SKIP_LIVE` (0/1), `NO_COLOR` (0/1).
+The file is parsed as text (never sourced or executed); unknown keys and malformed lines are
+ignored with a warning. Precedence: command line > config file > auto-detect / defaults.
+See `local-llm-checkup.conf.example`.
+
+## Defaults
 
 Auto-detection probes Ollama, then LM Studio, then llama.cpp and uses the first that answers.
 Without `--model`, Ollama uses the first loaded model (or the first installed non-embedding
@@ -95,7 +141,7 @@ prompt length. Ollama requests use `/api/chat` with `keep_alive` 10m, and `think
 | 0 | All scored items PASS |
 | 1 | At least one WARN, no FAIL |
 | 2 | At least one FAIL |
-| 3 | Tool error: missing dependency, bad arguments, unknown model, or a server chosen with `--server` that is unreachable without `--skip-live` |
+| 3 | Tool error: missing dependency, bad arguments, unreadable config file, unknown or embedding model, no server for `--list-models`, menu input ended, or a server chosen with `--server` that is unreachable without `--skip-live` |
 
 ## Report
 
