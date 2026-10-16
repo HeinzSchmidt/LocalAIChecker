@@ -841,6 +841,19 @@ Added to the macOS tool in PR #2; build the same behaviour into the Windows and 
    - Default locations: macOS `./local-llm-checkup.conf` next to the script or `~/.config/local-llm-checkup/config`; Linux the same two; Windows `local-llm-checkup.conf` next to the script or `%APPDATA%\local-llm-checkup\config`.
    - Ship a `local-llm-checkup.conf.example` and git-ignore the real config file.
 5. **Report:** the report header records how the model was chosen (CLI, config, interactive, or default) and the config file path used, or "none".
-6. **Model context maximum (C2):** Ollama caps the loaded context at the model's trained maximum (`ollama show <model>` "context length", or `/api/show` `model_info["<arch>.context_length"]`), so read it and show it next to the loaded context. When loaded context is below 64,000 and equals that maximum, keep the same WARN/FAIL thresholds but say the setting cannot raise it, and recommend a model with a larger trained context instead of changing `OLLAMA_CONTEXT_LENGTH`. If the maximum can't be read, fall back to the existing advice.
+6. **Model context maximum (C2):** Ollama never loads a model with more context than it was trained for, so `OLLAMA_CONTEXT_LENGTH` cannot raise the context past that limit (observed: `OLLAMA_CONTEXT_LENGTH=65536`, yet qwen2.5:3b, trained for 32,768, still loads at 32,768).
+   - Read the trained maximum from `POST /api/show` `{"model": "<name>"}`: `model_info["<general.architecture>.context_length"]`, falling back to any `*.context_length` key. `ollama show <model>` prints the same value as "context length".
+   - Scoring is unchanged: PASS at 64,000 or more, WARN for 32,000 to 63,999, FAIL below 32,000.
+   - When the loaded context is below 64,000 and equals the maximum, the detail reads `Context 32,768 = model maximum 32,768; setting cannot raise it`. The recommendation replaces the `OLLAMA_CONTEXT_LENGTH` steps with:
+     - This model was trained with a maximum context of N tokens, and Ollama never loads it with more. Raising `OLLAMA_CONTEXT_LENGTH` will not change it.
+     - Use a model with a larger trained context window (64,000 tokens or more) for agent sessions. Check a model's limit with `ollama show <model>` before choosing it.
+     - Re-run the tool with that model and confirm C2 shows PASS.
+   - When the loaded context is below the maximum, keep the existing advice (set `OLLAMA_CONTEXT_LENGTH`; on Windows a user environment variable, on Linux a systemd override) and add the model maximum to the detail and the first step. A PASS detail also shows it, for example `Context 131,072; model maximum 262,144`.
+   - Show the maximum in the report Environment section (`Model trained context (max)`) and in the live test details (`Loaded context (ollama ps): X; model trained maximum: Y`). If it can't be read, print a warning to stderr, show `n/a` and keep the existing advice.
+7. **HTML report:** whenever the markdown report is written, also write an HTML copy with the same base name (`.html`) in the same folder, and print both paths in the final summary.
+   - Self-contained: UTF-8 `<meta charset>`, inline CSS, no external assets or network. Results table cells show PASS (green), WARN (amber), FAIL (red), SKIP (grey) and ERROR (dark red) as coloured badges.
+   - Convert only what the report uses: headings, paragraphs, bold, inline code, fenced code blocks, bullet lists, tables (including escaped `\|` inside cells) and links. HTML-escape `&`, `<` and `>` before formatting.
+   - macOS and Linux: a small converter in awk, with no pandoc, Python or extra packages. Windows: `ConvertFrom-Markdown` on PowerShell 7+, or the same simple converter in PowerShell for Windows PowerShell 5.1; wrap the output in the same HTML template and CSS.
+   - If HTML generation fails, print an error to stderr and keep the markdown report and the exit code unchanged.
 
 Exit codes are unchanged (0 all pass, 1 warn, 2 fail, 3 tool error). The tools still never change any system or application configuration.

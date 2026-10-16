@@ -56,7 +56,8 @@ Usage: local-llm-checkup.sh [options]
   -l, --log <path>                          Server log file for C3 and C4
       --session-log <path>                  Agent session log for C4 (optional)
       --skip-live                           Run static checks only
-  -o, --output <dir>                        Report directory (default: ./reports)
+  -o, --output <dir>                        Report directory (default: ./reports); writes
+                                            llm-checkup-macos-<timestamp>.md and a .html copy
       --no-color                            Disable colours
   -h, --help                                Show help
       --version                             Show version
@@ -748,6 +749,118 @@ R
 }
 
 # ----------------------------------------------------------------------------
+# HTML copy of the report: a small markdown-to-HTML converter (awk only) that
+# covers exactly what the report uses: headings, paragraphs, bold, inline code,
+# fenced code blocks, bullet lists, tables and links. Content is HTML-escaped
+# first. Result cells PASS/WARN/FAIL/SKIP/ERROR become coloured badges.
+# Usage: md_to_html <in.md> <out.html>; non-zero on failure.
+# ----------------------------------------------------------------------------
+md_to_html() {
+  local in="$1" out="$2" title
+  title="$(head -n 1 "$in" | sed -e 's/^# *//' -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')"
+  {
+    cat <<HTML
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>$title</title>
+<style>
+body { font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; color: #1d1d1f; background: #fafafa; max-width: 980px; margin: 2em auto; padding: 0 1.2em; }
+h1 { font-size: 1.8em; border-bottom: 2px solid #ddd; padding-bottom: .3em; }
+h2 { font-size: 1.35em; margin-top: 1.8em; border-bottom: 1px solid #e5e5e5; padding-bottom: .2em; }
+h3 { font-size: 1.1em; margin-top: 1.4em; }
+code { font: .9em ui-monospace, Menlo, monospace; background: #eee; padding: .1em .35em; border-radius: 4px; }
+pre { background: #f0f0f0; padding: .8em 1em; border-radius: 6px; overflow-x: auto; }
+pre code { background: none; padding: 0; }
+table { border-collapse: collapse; margin: 1em 0; width: 100%; background: #fff; }
+th, td { border: 1px solid #ddd; padding: .45em .7em; text-align: left; vertical-align: top; }
+th { background: #f2f2f2; }
+tr:nth-child(even) td { background: #fbfbfb; }
+.badge { display: inline-block; min-width: 3.6em; text-align: center; font-weight: 600; font-size: .85em; padding: .15em .5em; border-radius: 999px; color: #fff; }
+.pass { background: #1e8e3e; } .warn { background: #e8a10c; } .fail { background: #d93025; }
+.skip { background: #8a8a8a; } .error { background: #a50e0e; }
+a { color: #0b57d0; }
+</style>
+</head>
+<body>
+HTML
+    awk '
+    function esc(s) { gsub(/&/, "\\&amp;", s); gsub(/</, "\\&lt;", s); gsub(/>/, "\\&gt;", s); return s }
+    # bold and links on text that contains no inline code
+    function fmt(s,   pre, mid, post, t, u, p) {
+      while (match(s, /\*\*[^*]+\*\*/)) {
+        pre = substr(s, 1, RSTART - 1); mid = substr(s, RSTART + 2, RLENGTH - 4); post = substr(s, RSTART + RLENGTH)
+        s = pre "<strong>" mid "</strong>" post
+      }
+      while (match(s, /\[[^]]*\]\([^) ]*\)/)) {
+        pre = substr(s, 1, RSTART - 1); mid = substr(s, RSTART, RLENGTH); post = substr(s, RSTART + RLENGTH)
+        p = index(mid, "](")
+        t = substr(mid, 2, p - 2); u = substr(mid, p + 2, length(mid) - p - 2)
+        s = pre "<a href=\"" u "\">" t "</a>" post
+      }
+      return s
+    }
+    # inline formatting: split on backticks; odd segments are code
+    function inl(s,   n, parts, i, r) {
+      n = split(s, parts, "`"); r = ""
+      if (n % 2 == 0) return fmt(s)          # unbalanced backticks: no code spans
+      for (i = 1; i <= n; i++) r = r ((i % 2 == 0) ? "<code>" parts[i] "</code>" : fmt(parts[i]))
+      return r
+    }
+    function badge(c,   t) {
+      t = c; gsub(/^ +| +$/, "", t)
+      if (t ~ /^(PASS|WARN|FAIL|SKIP|ERROR)$/) return "<span class=\"badge " tolower(t) "\">" t "</span>"
+      return inl(c)
+    }
+    function close_blocks() {
+      if (para != "") { print "<p>" inl(para) "</p>"; para = "" }
+      if (inlist) { print "</ul>"; inlist = 0 }
+      if (intable) { print "</tbody></table>"; intable = 0 }
+    }
+    function cells(line, tag,   n, a, i, r, c) {
+      gsub(/\\\|/, "\001", line)             # escaped pipes inside cells
+      sub(/^ *\|/, "", line); sub(/\| *$/, "", line)
+      n = split(line, a, "|"); r = "<tr>"
+      for (i = 1; i <= n; i++) {
+        c = a[i]; gsub(/^ +| +$/, "", c); gsub(/\001/, "|", c)
+        r = r "<" tag ">" (tag == "td" ? badge(c) : inl(c)) "</" tag ">"
+      }
+      return r "</tr>"
+    }
+    NR == 1 { next }                         # title is emitted as <h1> below
+    {
+      raw = $0
+      if (incode) { if (raw ~ /^```/) { print "</code></pre>"; incode = 0 } else print esc(raw); next }
+      if (raw ~ /^```/) { close_blocks(); print "<pre><code>"; incode = 1; next }
+      line = esc(raw)
+      if (line ~ /^#+ /) {
+        close_blocks(); match(line, /^#+/); lvl = RLENGTH; t = substr(line, lvl + 2)
+        print "<h" lvl ">" inl(t) "</h" lvl ">"; next
+      }
+      if (line ~ /^ *\|/) {
+        if (!intable) { close_blocks(); print "<table><thead>" cells(line, "th") "</thead><tbody>"; intable = 1; hdr = 1; next }
+        if (hdr && line ~ /^ *\|[-| :]+\| *$/) { hdr = 0; next }
+        hdr = 0; print cells(line, "td"); next
+      }
+      if (line ~ /^- /) {
+        if (para != "") { print "<p>" inl(para) "</p>"; para = "" }
+        if (intable) { print "</tbody></table>"; intable = 0 }
+        if (!inlist) { print "<ul>"; inlist = 1 }
+        print "<li>" inl(substr(line, 3)) "</li>"; next
+      }
+      if (line ~ /^[ \t]*$/) { close_blocks(); next }
+      if (inlist || intable) close_blocks()
+      para = (para == "") ? line : para " " line
+    }
+    END { close_blocks(); if (incode) print "</code></pre>" }
+    ' "$in" | { printf '<h1>%s</h1>\n' "$title"; cat; }
+    printf '</body>\n</html>\n'
+  } > "$out"
+}
+
+# ----------------------------------------------------------------------------
 # Markdown report (spec 7)
 # ----------------------------------------------------------------------------
 md_escape() { printf '%s' "$1" | sed 's/|/\\|/g'; }
@@ -804,10 +917,19 @@ md_escape() { printf '%s' "$1" | sed 's/|/\\|/g'; }
   true   # the group's status must not depend on the last optional line
 } > "$REPORT" || { err "could not write report: $REPORT"; exit 3; }
 
+# HTML copy with the same basename. A failure here is logged and never changes
+# the markdown report or the exit code.
+REPORT_HTML="${REPORT%.md}.html"
+if ! md_to_html "$REPORT" "$REPORT_HTML" 2>"$TMPD/html.err"; then
+  err "could not write HTML report $REPORT_HTML: $(head -n 3 "$TMPD/html.err" | tr '\n' ' ')"
+  rm -f "$REPORT_HTML" 2>/dev/null; REPORT_HTML=""
+fi
+
 # ----------------------------------------------------------------------------
 # Final summary
 # ----------------------------------------------------------------------------
 heading "Summary"
 printf '  Overall score: %s%s%s%s  (PASS %d, WARN %d, FAIL %d, SKIP %d, ERROR %d)\n' "$C_B" "$SC" "$SCORE_TXT" "$C_0" $NP $NW $NF $NS $NE
 printf '  Report: %s\n' "$REPORT"
+[ -n "$REPORT_HTML" ] && printf '  HTML:   %s\n' "$REPORT_HTML"
 exit $EXIT
