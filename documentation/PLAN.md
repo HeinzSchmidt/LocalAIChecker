@@ -859,5 +859,11 @@ Added to the macOS tool in PR #2; build the same behaviour into the Windows and 
    - Default: open only when stdout is a terminal. Never open in non-interactive runs (pipes, scripts) or when `CI` is set. Linux must also skip when neither `DISPLAY` nor `WAYLAND_DISPLAY` is set, or when running over SSH (`SSH_CONNECTION`/`SSH_TTY`).
    - Turn it off with `--no-open` (PowerShell: `-NoOpen`) or `OPEN_REPORT=0` in the config file. `OPEN_REPORT=1` cannot force opening outside a terminal.
    - Skip if the HTML report was not written. A failure to open prints an error to stderr and does not change the exit code.
+9. **Decision details shared by all tools** (as built in the macOS tool; the three specifications now state them):
+   - Cache counter preference: `usage.prompt_tokens_details.cached_tokens`, then `timings.cache_n`, then Ollama's `prompt_eval_cached_count` (current Ollama reports it next to the full `prompt_eval_count`), and only then `prompt_eval_count` compared with request 1's prompt length. Ollama requests use `/api/chat` with `keep_alive` and `think: true` when `/api/show` lists the `thinking` capability.
+   - C4: request 2's prompt token count is the shared prefix size; 80% or more cached is PASS, 1% to 79% is WARN, 0 is FAIL, no counter is WARN (timing only).
+   - C3: count `full prompt reprocessing` only in log lines written during this run (note the log size, or the journal cursor on Linux, at start).
+   - C5: compare turns 2, 3 and 4; one drop is WARN, drops on both is FAIL, no reasoning output is SKIP.
+   - Auto-detect with no server responding: the live checks are SKIP. A server named explicitly that doesn't respond (without skip-live) is exit 3.
 
 Exit codes are unchanged (0 all pass, 1 warn, 2 fail, 3 tool error). The tools still never change any system or application configuration.
