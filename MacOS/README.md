@@ -117,6 +117,8 @@ Default server logs: Ollama `~/.ollama/logs/server.log`; LM Studio the newest fi
 | C4 | Cache tokens on request 2 | cached ≥ 80% of prompt | no counter (timing only), or 1–79% | 0 cached |
 | C5 | Thinking preserved (turns 2→3→4) | cached never drops | drops once | drops on two consecutive turns |
 
+C2 also reads the model's trained maximum (`/api/show` `model_info["<arch>.context_length"]`). Ollama never loads a model above it, so when the loaded context equals a maximum below 64,000 the detail says the setting cannot raise it and the advice is to use a model with a larger trained context.
+
 SKIP (not applicable) and ERROR (could not run) are excluded from the score. The overall score
 is the mean of PASS=1.0, WARN=0.5, FAIL=0.0.
 
@@ -149,6 +151,12 @@ Written to `<output>/llm-checkup-macos-YYYYMMDD-HHMMSS.md` with: title and times
 environment, summary counts, results table, live test details (per-turn TTFT, total time,
 prompt and cached tokens, reasoning size), a recommendation for every non-PASS item
 (found / why / macOS fix / verify), and notes and limitations.
+
+
+An HTML copy is written next to it (`llm-checkup-macos-YYYYMMDD-HHMMSS.html`): self-contained
+(inline CSS, UTF-8, no network), with coloured PASS/WARN/FAIL/SKIP badges in the results table.
+It is produced by a small built-in awk converter (no pandoc or Python). If it cannot be written,
+the error goes to stderr and the markdown report and exit code are unchanged.
 
 ## Limitations
 
