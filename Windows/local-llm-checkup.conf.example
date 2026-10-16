@@ -1,0 +1,39 @@
+# local-llm-checkup.conf.example (Windows)
+#
+# Copy to one of these locations (first found wins) or pass with -Config <path>:
+#   local-llm-checkup.conf                 (next to Invoke-LocalLLMCheckup.ps1)
+#   %APPDATA%\local-llm-checkup\config
+#
+# Format: KEY=value, one per line. Lines starting with # are comments.
+# Values may be wrapped in "double" or 'single' quotes. The file is read as
+# plain text; it is never sourced or executed. Unknown keys are ignored with a warning.
+# Command-line options always override values here.
+
+# Server: ollama, lmstudio or llamacpp (empty = auto-detect Ollama -> LM Studio -> llama.cpp)
+#SERVER=ollama
+
+# Endpoint override (needs SERVER)
+#URL=http://localhost:11434
+
+# Model to test; validated against the installed models (Ollama ":latest" optional).
+# When unset and running in a terminal, a menu of installed models is shown.
+#MODEL=qwen2.5:3b
+
+# Server log for C3 (default for Ollama: %LOCALAPPDATA%\Ollama\server.log)
+#LOG=%LOCALAPPDATA%\Ollama\server.log
+
+# Agent session log for C4 (optional)
+#SESSION_LOG=
+
+# Report directory
+#OUTPUT=.\reports
+
+# 1 = static checks only, 0 = run the live test
+#SKIP_LIVE=0
+
+# 1 = plain output without colours
+#NO_COLOR=0
+
+# 1 = open the HTML report in the default browser at the end (only in an interactive console on Windows,
+# never in CI or when piped), 0 = never open. Default: open on a terminal.
+#OPEN_REPORT=1

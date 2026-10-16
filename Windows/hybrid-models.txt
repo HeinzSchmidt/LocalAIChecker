@@ -1,0 +1,40 @@
+# hybrid-models.txt - model-family patterns for hybrid / SSM / recurrent-attention models
+#
+# Used by local-llm-checkup.sh for check C3. Hybrid models mix attention layers with
+# state-space (Mamba-style) or recurrent / linear-attention layers. Their recurrent state
+# cannot be rewound to an arbitrary token, so servers such as llama.cpp may fall back to
+# "full prompt reprocessing" when the prompt prefix diverges from a saved checkpoint.
+#
+# Format: one case-insensitive extended regular expression (grep -E) per line.
+# A pattern is matched anywhere in the model name/tag as reported by the server
+# (for example "granite4:tiny-h", "qwen3-next:80b", "lmstudio-community/Jamba-...").
+# Blank lines and lines starting with # are ignored. Trailing "# ..." comments are stripped.
+# Entries marked UNCERTAIN are included on a best-effort basis; verify against the
+# model card before relying on the result.
+
+# --- Qwen ---
+qwen3-next                 # Qwen3-Next: Gated DeltaNet + gated attention hybrid
+qwen3\.5                   # Qwen3.5: hybrid (Gated DeltaNet) per Qwen release notes. UNCERTAIN for every size/variant
+qwen3\.8                   # Qwen3.8 (e.g. Qwen3.8-27B named in PLAN.md as a hybrid). UNCERTAIN beyond that example
+
+# --- IBM Granite 4 (Mamba-2 hybrid) ---
+granite-?4(\.[0-9]+)?[-:_.].*-h([-:_.]|$)  # granite4 "-h" variants (tiny-h, small-h, micro-h)
+granite-?4(\.[0-9]+)?-h                    # granite-4.0-h-* style names
+# NOTE: plain granite4:micro (no -h) is a dense transformer; granite3* is not hybrid.
+
+# --- NVIDIA Nemotron ---
+nemotron-h                 # Nemotron-H: Mamba-2 hybrid
+nemotron-?3                # Nemotron 3 (Nano/Super): hybrid Mamba-Transformer MoE. UNCERTAIN for all sizes
+nemotron-nano-(9b|12b)-v2  # Nemotron Nano v2 (9B/12B) are Nemotron-H based
+
+# --- Other SSM / hybrid families ---
+jamba                      # AI21 Jamba: Mamba + attention + MoE
+falcon-?h1                 # TII Falcon-H1: parallel attention + Mamba-2
+falcon-?mamba              # Falcon-Mamba: pure SSM
+lfm-?2                     # Liquid LFM2: short convolutions + attention (recurrent-style state)
+mamba                      # Mamba / Mamba-2 / Codestral-Mamba: pure SSM
+rwkv                       # RWKV: recurrent (linear attention)
+zamba                      # Zyphra Zamba / Zamba2: Mamba + shared attention
+recurrentgemma             # Google RecurrentGemma (Griffin). UNCERTAIN whether local servers support it
+hymba                      # NVIDIA Hymba: parallel attention + SSM heads. UNCERTAIN local server support
+plamo-?2                   # PLaMo 2: Mamba hybrid. UNCERTAIN
