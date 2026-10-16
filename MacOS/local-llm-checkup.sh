@@ -29,6 +29,7 @@ KEEP_ALIVE="10m"              # Ollama: keep the model (and its cache) loaded be
 OPT_SERVER=""; OPT_URL=""; OPT_MODEL=""; OPT_LOG=""; OPT_SESSION_LOG=""
 OPT_SKIP_LIVE=""; OPT_OUTPUT=""; OPT_NO_COLOR=""
 OPT_CONFIG=""; OPT_LIST_MODELS=0; OPT_INTERACTIVE=0
+OPT_OPEN=""          # open the HTML report at the end: "" = auto (TTY only), 0 = never, 1 = yes (still TTY only)
 MODEL_SOURCE=""     # how the model was chosen: CLI, config, interactive, default
 CONFIG_USED=""      # config file actually read (for the report)
 
@@ -59,11 +60,13 @@ Usage: local-llm-checkup.sh [options]
   -o, --output <dir>                        Report directory (default: ./reports); writes
                                             llm-checkup-macos-<timestamp>.md and a .html copy
       --no-color                            Disable colours
+      --no-open                             Do not open the HTML report in the browser (it opens
+                                            by default only when stdout is a terminal)
   -h, --help                                Show help
       --version                             Show version
 
 Config file: KEY=value lines; keys SERVER, URL, MODEL, LOG, SESSION_LOG, OUTPUT,
-SKIP_LIVE (0/1), NO_COLOR (0/1). Command-line options override the config file.
+SKIP_LIVE (0/1), NO_COLOR (0/1), OPEN_REPORT (0/1). Command-line options override the config file.
 
 Exit codes: 0 all scored items PASS, 1 WARN (no FAIL), 2 at least one FAIL, 3 tool error.
 USAGE
@@ -109,6 +112,7 @@ while [ $# -gt 0 ]; do
     --skip-live) OPT_SKIP_LIVE=1; shift;;
     -o|--output) need_arg "$1" "$2"; OPT_OUTPUT="$(expand_path "$2")"; shift 2;;
     --no-color|--no-colour) OPT_NO_COLOR=1; shift;;
+    --no-open) OPT_OPEN=0; shift;;
     -h|--help) usage; exit 0;;
     --version) printf 'local-llm-checkup.sh %s\n' "$VERSION"; exit 0;;
     *) err "unknown option: $1"; usage >&2; exit 3;;
@@ -149,11 +153,14 @@ if [ -n "$CONFIG_USED" ]; then
       LOG)         [ -z "$OPT_LOG" ] && OPT_LOG="$(expand_path "$val")";;
       SESSION_LOG) [ -z "$OPT_SESSION_LOG" ] && OPT_SESSION_LOG="$(expand_path "$val")";;
       OUTPUT)      [ -z "$OPT_OUTPUT" ] && OPT_OUTPUT="$(expand_path "$val")";;
-      SKIP_LIVE|NO_COLOR)
+      SKIP_LIVE|NO_COLOR|OPEN_REPORT)
         case "$(lower "$val")" in 1|true|yes|on) b=1;; 0|false|no|off|'') b=0;;
           *) warn "$CONFIG_USED:$lineno: $key must be 0 or 1, got '$val'; ignored"; continue;; esac
-        if [ "$key" = SKIP_LIVE ]; then [ -z "$OPT_SKIP_LIVE" ] && OPT_SKIP_LIVE=$b
-        else [ -z "$OPT_NO_COLOR" ] && OPT_NO_COLOR=$b; fi;;
+        case "$key" in
+          SKIP_LIVE) [ -z "$OPT_SKIP_LIVE" ] && OPT_SKIP_LIVE=$b;;
+          NO_COLOR) [ -z "$OPT_NO_COLOR" ] && OPT_NO_COLOR=$b;;
+          OPEN_REPORT) [ -z "$OPT_OPEN" ] && OPT_OPEN=$b;;
+        esac;;
       *) warn "$CONFIG_USED:$lineno: unknown key '$key' ignored";;
     esac
   done < "$CONFIG_USED"
@@ -932,4 +939,15 @@ heading "Summary"
 printf '  Overall score: %s%s%s%s  (PASS %d, WARN %d, FAIL %d, SKIP %d, ERROR %d)\n' "$C_B" "$SC" "$SCORE_TXT" "$C_0" $NP $NW $NF $NS $NE
 printf '  Report: %s\n' "$REPORT"
 [ -n "$REPORT_HTML" ] && printf '  HTML:   %s\n' "$REPORT_HTML"
+
+# Open the HTML report in the default browser. Only on a terminal and outside CI,
+# never when --no-open / OPEN_REPORT=0, and only if the HTML was written.
+# A failure is logged and does not change the exit code.
+if [ -n "$REPORT_HTML" ] && [ "$OPT_OPEN" != "0" ] && [ -t 1 ] && [ -z "${CI-}" ]; then
+  if command -v open >/dev/null 2>&1 && open "$REPORT_HTML" 2>"$TMPD/open.err"; then
+    printf '  Opened the HTML report in your default browser.\n'
+  else
+    err "could not open $REPORT_HTML: $(head -n 2 "$TMPD/open.err" 2>/dev/null | tr '\n' ' ')"
+  fi
+fi
 exit $EXIT

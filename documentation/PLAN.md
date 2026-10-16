@@ -855,5 +855,9 @@ Added to the macOS tool in PR #2; build the same behaviour into the Windows and 
    - Convert only what the report uses: headings, paragraphs, bold, inline code, fenced code blocks, bullet lists, tables (including escaped `\|` inside cells) and links. HTML-escape `&`, `<` and `>` before formatting.
    - macOS and Linux: a small converter in awk, with no pandoc, Python or extra packages. Windows: `ConvertFrom-Markdown` on PowerShell 7+, or the same simple converter in PowerShell for Windows PowerShell 5.1; wrap the output in the same HTML template and CSS.
    - If HTML generation fails, print an error to stderr and keep the markdown report and the exit code unchanged.
+8. **Open the report:** at the end of a run, open the HTML report in the default browser (macOS `open`, Windows `Start-Process`/`Invoke-Item`, Linux `xdg-open`).
+   - Default: open only when stdout is a terminal. Never open in non-interactive runs (pipes, scripts) or when `CI` is set. Linux must also skip when neither `DISPLAY` nor `WAYLAND_DISPLAY` is set, or when running over SSH (`SSH_CONNECTION`/`SSH_TTY`).
+   - Turn it off with `--no-open` (PowerShell: `-NoOpen`) or `OPEN_REPORT=0` in the config file. `OPEN_REPORT=1` cannot force opening outside a terminal.
+   - Skip if the HTML report was not written. A failure to open prints an error to stderr and does not change the exit code.
 
 Exit codes are unchanged (0 all pass, 1 warn, 2 fail, 3 tool error). The tools still never change any system or application configuration.
