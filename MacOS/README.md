@@ -45,6 +45,7 @@ reads them and sends test requests. Implements
       --skip-live                           Run static checks only
   -o, --output <dir>                        Report directory (default: ./reports)
       --no-color                            Disable colours
+      --no-open                             Do not open the HTML report in the browser
   -h, --help                                Show help
       --version                             Show version
 ```
@@ -93,7 +94,7 @@ Choose 1-5 [1]: 2
 
 Read from `-c <file>`, else `local-llm-checkup.conf` next to the script, else
 `~/.config/local-llm-checkup/config`. Plain `KEY=value` lines; `#` comments; optional quotes.
-Keys: `SERVER`, `URL`, `MODEL`, `LOG`, `SESSION_LOG`, `OUTPUT`, `SKIP_LIVE` (0/1), `NO_COLOR` (0/1).
+Keys: `SERVER`, `URL`, `MODEL`, `LOG`, `SESSION_LOG`, `OUTPUT`, `SKIP_LIVE` (0/1), `NO_COLOR` (0/1), `OPEN_REPORT` (0/1).
 The file is parsed as text (never sourced or executed); unknown keys and malformed lines are
 ignored with a warning. Precedence: command line > config file > auto-detect / defaults.
 See `local-llm-checkup.conf.example`.
@@ -157,6 +158,10 @@ An HTML copy is written next to it (`llm-checkup-macos-YYYYMMDD-HHMMSS.html`): s
 (inline CSS, UTF-8, no network), with coloured PASS/WARN/FAIL/SKIP badges in the results table.
 It is produced by a small built-in awk converter (no pandoc or Python). If it cannot be written,
 the error goes to stderr and the markdown report and exit code are unchanged.
+
+At the end of a run in a terminal, the HTML report opens in your default browser (`open`).
+It never opens when stdout is not a terminal (pipes, scripts) or when `CI` is set; turn it off with
+`--no-open` or `OPEN_REPORT=0` in the config. A failure to open is logged and does not change the exit code.
 
 ## Limitations
 

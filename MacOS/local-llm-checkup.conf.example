@@ -33,3 +33,7 @@
 
 # 1 = plain output without colours
 #NO_COLOR=0
+
+# 1 = open the HTML report in the default browser at the end (only when run in a terminal,
+# never in CI or when piped), 0 = never open. Default: open on a terminal.
+#OPEN_REPORT=1
