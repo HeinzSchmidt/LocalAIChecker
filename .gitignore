@@ -6,3 +6,5 @@ MacOS/local-llm-checkup.conf
 # Windows tool
 Windows/reports/
 Windows/local-llm-checkup.conf
+Linux/reports/
+Linux/local-llm-checkup.conf
