@@ -106,7 +106,7 @@ Full details are in [Windows/README.md](Windows/README.md).
 
 ## Usage: Linux
 
-**You need** Debian or Ubuntu (other distributions will probably work), `bash`, `curl` and `jq`
+**You need** Debian 12+ or Ubuntu 22.04+ (other distributions will probably work), `bash` 4+, `curl` and `jq`
 (`sudo apt install jq curl`).
 
 ```bash
